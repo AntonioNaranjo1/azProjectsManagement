@@ -95,7 +95,10 @@ Filtrar por prefijo:
 
 ```bash
 ./azbm.sh list-open --quarter 2026q1 --prefix app1
+./azbm.sh list-open --quarter 2026q1 --prefix "app1 web"
 ```
+
+Si el prefijo tiene espacios, ponlo siempre entre comillas.
 
 Planificar migracion, sin escribir nada:
 

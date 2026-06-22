@@ -379,10 +379,8 @@ query_feature_ids() {
   local iteration_path="$1"
   local exact_title="${2:-}"
   local include_closed="${3:-false}"
-  local wiql
   local json
-  wiql="$(build_features_wiql "$iteration_path" "$exact_title" "$include_closed")"
-  json="$(az_with_project_json boards query --wiql "$wiql")"
+  json="$(query_features_json "$iteration_path" "$exact_title" "$include_closed")"
   jq_run -r '
     if type == "array" then
       .[]? | (.id // .fields["System.Id"] // empty)
@@ -393,6 +391,51 @@ query_feature_ids() {
     else
       empty
     end
+  ' <<<"$json"
+}
+
+query_features_json() {
+  local iteration_path="$1"
+  local exact_title="${2:-}"
+  local include_closed="${3:-false}"
+  local wiql
+  wiql="$(build_features_wiql "$iteration_path" "$exact_title" "$include_closed")"
+  az_with_project_json boards query --wiql "$wiql"
+}
+
+query_json_has_fields() {
+  local json="$1"
+  jq_run -e '
+    if type == "array" then
+      any(.[]?; has("fields"))
+    elif type == "object" and has("value") then
+      any(.value[]?; has("fields"))
+    else
+      false
+    end
+  ' >/dev/null <<<"$json"
+}
+
+feature_rows_from_query_json() {
+  local json="$1"
+  jq_run -r '
+    def rows:
+      if type == "array" then
+        .[]?
+      elif type == "object" and has("value") then
+        .value[]?
+      else
+        empty
+      end;
+    rows
+    | select(.fields? != null)
+    | [
+        (.id // .fields["System.Id"] // ""),
+        (.fields["System.State"] // ""),
+        (.fields["System.WorkItemType"] // ""),
+        (.fields["System.Title"] // "")
+      ]
+    | @tsv
   ' <<<"$json"
 }
 
@@ -410,15 +453,67 @@ find_open_feature_ids() {
   local iteration_path="$1"
   local prefix="$2"
   local quarter="$3"
-  local id item_json title
-  while IFS= read -r id; do
-    [[ -n "$id" ]] || continue
-    item_json="$(show_work_item_json "$id")"
-    title="$(field_from_json "$item_json" "System.Title")"
-    if title_matches_prefix_quarter "$title" "$prefix" "$quarter"; then
-      printf '%s\n' "$id"
-    fi
-  done < <(query_feature_ids "$iteration_path" "" false)
+  local json
+  json="$(query_features_json "$iteration_path" "" false)"
+
+  if query_json_has_fields "$json"; then
+    local row id state type title
+    while IFS=$'\t' read -r id state type title; do
+      [[ -n "$id" ]] || continue
+      if title_matches_prefix_quarter "$title" "$prefix" "$quarter"; then
+        printf '%s\n' "$id"
+      fi
+    done < <(feature_rows_from_query_json "$json")
+  else
+    local id item_json title
+    while IFS= read -r id; do
+      [[ -n "$id" ]] || continue
+      item_json="$(show_work_item_json "$id")"
+      title="$(field_from_json "$item_json" "System.Title")"
+      if title_matches_prefix_quarter "$title" "$prefix" "$quarter"; then
+        printf '%s\n' "$id"
+      fi
+    done < <(query_feature_ids "$iteration_path" "" false)
+  fi
+}
+
+print_open_features() {
+  local iteration_path="$1"
+  local prefix="$2"
+  local quarter="$3"
+  local json
+  echo "Consultando Azure Boards..." >&2
+  json="$(query_features_json "$iteration_path" "" false)"
+
+  local matched_count=0
+  if query_json_has_fields "$json"; then
+    local row id state type title
+    while IFS=$'\t' read -r id state type title; do
+      [[ -n "$id" ]] || continue
+      if title_matches_prefix_quarter "$title" "$prefix" "$quarter"; then
+        printf '%-8s %-18s %-16s %s\n' "$id" "$state" "$type" "$title"
+        ((matched_count += 1))
+      fi
+    done < <(feature_rows_from_query_json "$json")
+  else
+    echo "La respuesta de az boards query no trae campos; usando fallback mas lento con work-item show." >&2
+    local id item_json title state type
+    while IFS= read -r id; do
+      [[ -n "$id" ]] || continue
+      item_json="$(show_work_item_json "$id")"
+      title="$(field_from_json "$item_json" "System.Title")"
+      if title_matches_prefix_quarter "$title" "$prefix" "$quarter"; then
+        state="$(field_from_json "$item_json" "System.State")"
+        type="$(field_from_json "$item_json" "System.WorkItemType")"
+        printf '%-8s %-18s %-16s %s\n' "$id" "$state" "$type" "$title"
+        ((matched_count += 1))
+      fi
+    done < <(query_feature_ids "$iteration_path" "" false)
+  fi
+
+  if (( matched_count == 0 )); then
+    echo "(sin resultados)"
+  fi
 }
 
 child_ids_from_json() {
@@ -681,16 +776,7 @@ list_open() {
   echo "Features abiertas en AreaPath='$AZBM_AREA_PATH', IterationPath='$iteration_path'"
   printf '%-8s %-18s %-16s %s\n' "ID" "Estado" "Tipo" "Titulo"
   printf '%-8s %-18s %-16s %s\n' "--------" "------------------" "----------------" "------"
-
-  local id item_json title state type
-  while IFS= read -r id; do
-    [[ -n "$id" ]] || continue
-    item_json="$(show_work_item_json "$id")"
-    title="$(field_from_json "$item_json" "System.Title")"
-    state="$(field_from_json "$item_json" "System.State")"
-    type="$(field_from_json "$item_json" "System.WorkItemType")"
-    printf '%-8s %-18s %-16s %s\n' "$id" "$state" "$type" "$title"
-  done < <(find_open_feature_ids "$iteration_path" "$prefix" "$quarter")
+  print_open_features "$iteration_path" "$prefix" "$quarter"
 }
 
 migrate() {
