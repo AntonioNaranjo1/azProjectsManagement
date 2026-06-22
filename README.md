@@ -1,21 +1,21 @@
 # Azure Backlog Migrator
 
-CLI para Windows Bash que usa `az` para analizar Features abiertas de Azure Boards y migrarlas entre trimestres con patron `YYYYqN`, por ejemplo `app1 2026q1 -> app1 2026q2` o `app32026q4 -> app32027q1`.
+CLI para Windows Bash que usa comandos `az` directamente para analizar Features abiertas de Azure Boards y migrarlas entre trimestres con patron `YYYYqN`, por ejemplo `app1 2026q1 -> app1 2026q2` o `app32026q4 -> app32027q1`.
 
 Por seguridad, `migrate` es `dry-run` por defecto. Solo modifica Azure Boards cuando se pasa `--apply`.
 
 ## Requisitos
 
 - Windows Bash: Git Bash, MSYS2 o similar.
-- Python 3.
 - Azure CLI.
-- Extension Azure DevOps:
+- Extension Azure DevOps.
+- `jq`, preferiblemente en `bin/jq.exe` dentro del repo en Windows.
 
 ```bash
 az extension add --name azure-devops
 ```
 
-Microsoft documenta que la extension `azure-devops` aporta los grupos `az devops`, `az boards`, etc. y que se puede autenticar con `AZURE_DEVOPS_EXT_PAT`.
+El script busca `jq` en este orden: `bin/jq.exe`, `bin/jq`, y despues `jq` en el `PATH`.
 
 ## Configuracion
 
@@ -121,15 +121,6 @@ Los hijos con tipo distinto a `story_types` o estados en `open_states_exclude` s
 
 ```bash
 ./azbm.sh migrate --prefix app1 --from-q 2026q1 --include-closed-stories
-```
-
-## Salida JSON
-
-Para integrarlo con otros scripts:
-
-```bash
-./azbm.sh list-open --quarter 2026q1 --json
-./azbm.sh migrate --prefix app1 --from-q 2026q1 --json
 ```
 
 ## Notas de seguridad
