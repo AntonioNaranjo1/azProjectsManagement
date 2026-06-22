@@ -7,6 +7,11 @@
   "feature_type": "Feature",
   "story_types": ["User Story"],
   "open_states_exclude": ["Closed", "Done", "Removed", "Resolved"],
+  "feature_active_state": "Active",
+  "feature_resolved_state": "Resolved",
+  "feature_closed_state": "Closed",
+  "feature_start_date_field": "Microsoft.VSTS.Scheduling.StartDate",
+  "feature_end_date_field": "Microsoft.VSTS.Scheduling.TargetDate",
   "copy_feature_fields": [
     "System.Description",
     "System.Tags",

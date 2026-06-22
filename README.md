@@ -28,7 +28,12 @@ Crea `azbm.config.json` a partir de `config.example.json` y ajusta:
   "area_path": "MiProyecto\\MiArea",
   "iteration_path_template": "MiProyecto\\{year}\\{quarter_upper}",
   "feature_type": "Feature",
-  "story_types": ["User Story"]
+  "story_types": ["User Story"],
+  "feature_active_state": "Active",
+  "feature_resolved_state": "Resolved",
+  "feature_closed_state": "Closed",
+  "feature_start_date_field": "Microsoft.VSTS.Scheduling.StartDate",
+  "feature_end_date_field": "Microsoft.VSTS.Scheduling.TargetDate"
 }
 ```
 
@@ -119,9 +124,30 @@ Para cada Feature abierta que coincida con `--prefix` y `--from-q`:
 1. Calcula el titulo destino reemplazando el trimestre en el titulo.
 2. Busca si ya existe una Feature destino con ese titulo en el `IterationPath` destino.
 3. Si no existe, crea una nueva Feature con el mismo titulo migrado, misma AreaPath y campos configurados en `copy_feature_fields`.
-4. Detecta hijos de tipo `User Story` por relacion padre-hijo.
-5. Mueve esas historias desde la Feature origen a la Feature destino.
-6. Actualiza el `IterationPath` de cada historia al destino.
+4. Mantiene la misma epica padre de la Feature origen enlazando la Feature destino bajo esa epica.
+5. Deja la Feature destino en `feature_active_state`.
+6. Pone la fecha de inicio y fin de la Feature destino al primer y ultimo dia del quarter destino.
+7. Detecta hijos de tipo `User Story` por relacion padre-hijo.
+8. Mueve esas historias desde la Feature origen a la Feature destino.
+9. Actualiza el `IterationPath` de cada historia al destino.
+10. Cierra la Feature origen pasando antes por `feature_resolved_state` y despues por `feature_closed_state`.
+
+Por defecto las fechas se escriben en:
+
+- `Microsoft.VSTS.Scheduling.StartDate`
+- `Microsoft.VSTS.Scheduling.TargetDate`
+
+Si tu proceso usa estados en espanol o personalizados, cambia estos valores en `azbm.config.json`:
+
+```json
+{
+  "feature_active_state": "Active",
+  "feature_resolved_state": "Resolved",
+  "feature_closed_state": "Closed"
+}
+```
+
+Si la Feature destino ya existe y cuelga de otra epica, `--apply` se detiene para no mezclar jerarquias.
 
 Los hijos con tipo distinto a `story_types` o estados en `open_states_exclude` se muestran como ignorados. Para incluir historias cerradas:
 

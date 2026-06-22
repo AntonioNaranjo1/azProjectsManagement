@@ -15,6 +15,11 @@ AZBM_DEFAULT_ITERATION_PATH="${AZBM_DEFAULT_ITERATION_PATH:-}"
 AZBM_FEATURE_TYPE="${AZBM_FEATURE_TYPE:-Feature}"
 AZBM_STORY_TYPES=("User Story")
 AZBM_OPEN_STATES_EXCLUDE=("Closed" "Done" "Removed" "Resolved")
+AZBM_FEATURE_ACTIVE_STATE="${AZBM_FEATURE_ACTIVE_STATE:-Active}"
+AZBM_FEATURE_RESOLVED_STATE="${AZBM_FEATURE_RESOLVED_STATE:-Resolved}"
+AZBM_FEATURE_CLOSED_STATE="${AZBM_FEATURE_CLOSED_STATE:-Closed}"
+AZBM_FEATURE_START_DATE_FIELD="${AZBM_FEATURE_START_DATE_FIELD:-Microsoft.VSTS.Scheduling.StartDate}"
+AZBM_FEATURE_END_DATE_FIELD="${AZBM_FEATURE_END_DATE_FIELD:-Microsoft.VSTS.Scheduling.TargetDate}"
 AZBM_COPY_FEATURE_FIELDS=(
   "System.Description"
   "System.Tags"
@@ -106,6 +111,35 @@ next_quarter() {
   else
     printf '%sq%s\n' "$year" "$((q + 1))"
   fi
+}
+
+quarter_start_date() {
+  local quarter year q month
+  quarter="$(normalize_quarter "$1")"
+  year="${quarter:0:4}"
+  q="${quarter:5:1}"
+  case "$q" in
+    1) month="01" ;;
+    2) month="04" ;;
+    3) month="07" ;;
+    4) month="10" ;;
+    *) die "Trimestre invalido: $quarter" ;;
+  esac
+  printf '%s-%s-01\n' "$year" "$month"
+}
+
+quarter_end_date() {
+  local quarter year q
+  quarter="$(normalize_quarter "$1")"
+  year="${quarter:0:4}"
+  q="${quarter:5:1}"
+  case "$q" in
+    1) printf '%s-03-31\n' "$year" ;;
+    2) printf '%s-06-30\n' "$year" ;;
+    3) printf '%s-09-30\n' "$year" ;;
+    4) printf '%s-12-31\n' "$year" ;;
+    *) die "Trimestre invalido: $quarter" ;;
+  esac
 }
 
 render_iteration_path() {
@@ -221,6 +255,11 @@ load_config() {
   AZBM_ITERATION_PATH_TEMPLATE="$(jq_run -r '.iteration_path_template // .iterationPathTemplate // ""' "$CONFIG_FILE")"
   AZBM_DEFAULT_ITERATION_PATH="$(jq_run -r '.default_iteration_path // .defaultIterationPath // ""' "$CONFIG_FILE")"
   AZBM_FEATURE_TYPE="$(jq_run -r '.feature_type // .featureType // "Feature"' "$CONFIG_FILE")"
+  AZBM_FEATURE_ACTIVE_STATE="$(jq_run -r '.feature_active_state // .featureActiveState // "Active"' "$CONFIG_FILE")"
+  AZBM_FEATURE_RESOLVED_STATE="$(jq_run -r '.feature_resolved_state // .featureResolvedState // "Resolved"' "$CONFIG_FILE")"
+  AZBM_FEATURE_CLOSED_STATE="$(jq_run -r '.feature_closed_state // .featureClosedState // "Closed"' "$CONFIG_FILE")"
+  AZBM_FEATURE_START_DATE_FIELD="$(jq_run -r '.feature_start_date_field // .featureStartDateField // "Microsoft.VSTS.Scheduling.StartDate"' "$CONFIG_FILE")"
+  AZBM_FEATURE_END_DATE_FIELD="$(jq_run -r '.feature_end_date_field // .featureEndDateField // "Microsoft.VSTS.Scheduling.TargetDate"' "$CONFIG_FILE")"
   load_json_array '.story_types // .storyTypes' AZBM_STORY_TYPES
   load_json_array '.open_states_exclude // .openStatesExclude' AZBM_OPEN_STATES_EXCLUDE
   load_json_array '.copy_feature_fields // .copyFeatureFields' AZBM_COPY_FEATURE_FIELDS
@@ -393,6 +432,17 @@ child_ids_from_json() {
   ' <<<"$json"
 }
 
+parent_id_from_json() {
+  local json="$1"
+  jq_run -r '
+    .relations[]?
+    | select(.rel == "System.LinkTypes.Hierarchy-Reverse")
+    | .url
+    | sub("^.*/"; "")
+    | select(test("^[0-9]+$"))
+  ' <<<"$json" | sed -n '1p'
+}
+
 create_feature() {
   local source_json="$1"
   local target_title="$2"
@@ -431,6 +481,83 @@ create_feature() {
   fi
 
   "${cmd[@]}" | jq_run -r '.id'
+}
+
+target_parent_status() {
+  local source_parent_id="$1"
+  local target_json="$2"
+  if [[ -z "$source_parent_id" ]]; then
+    echo "none"
+    return 0
+  fi
+
+  local target_parent_id
+  target_parent_id="$(parent_id_from_json "$target_json")"
+
+  if [[ -z "$target_parent_id" ]]; then
+    echo "missing"
+  elif [[ "$target_parent_id" == "$source_parent_id" ]]; then
+    echo "same"
+  else
+    echo "different:$target_parent_id"
+  fi
+}
+
+ensure_feature_parent() {
+  local parent_id="$1"
+  local target_id="$2"
+  local target_json="$3"
+  [[ -n "$parent_id" ]] || return 0
+
+  local status
+  status="$(target_parent_status "$parent_id" "$target_json")"
+  case "$status" in
+    same)
+      return 0
+      ;;
+    missing)
+      az_base boards work-item relation add \
+        --id "$parent_id" \
+        --relation-type child \
+        --target-id "$target_id" \
+        --org "$AZBM_ORGANIZATION" \
+        --output none
+      ;;
+    different:*)
+      die "La Feature destino #$target_id ya tiene otra epica padre (#${status#different:}). No la cambio automaticamente."
+      ;;
+  esac
+}
+
+update_target_feature_metadata() {
+  local target_id="$1"
+  local start_date="$2"
+  local end_date="$3"
+
+  az_base boards work-item update \
+    --id "$target_id" \
+    --state "$AZBM_FEATURE_ACTIVE_STATE" \
+    --fields \
+      "$AZBM_FEATURE_START_DATE_FIELD=$start_date" \
+      "$AZBM_FEATURE_END_DATE_FIELD=$end_date" \
+    --org "$AZBM_ORGANIZATION" \
+    --output none
+}
+
+close_source_feature() {
+  local source_id="$1"
+
+  az_base boards work-item update \
+    --id "$source_id" \
+    --state "$AZBM_FEATURE_RESOLVED_STATE" \
+    --org "$AZBM_ORGANIZATION" \
+    --output none
+
+  az_base boards work-item update \
+    --id "$source_id" \
+    --state "$AZBM_FEATURE_CLOSED_STATE" \
+    --org "$AZBM_ORGANIZATION" \
+    --output none
 }
 
 move_story_to_feature() {
@@ -635,16 +762,25 @@ migrate() {
   [[ -n "$to_q" ]] || to_q="$(next_quarter "$from_q")"
   [[ -n "$from_iteration" ]] || from_iteration="$(render_iteration_path "$AZBM_ITERATION_PATH_TEMPLATE" "$from_q")"
   [[ -n "$to_iteration" ]] || to_iteration="$(render_iteration_path "$AZBM_ITERATION_PATH_TEMPLATE" "$to_q")"
+  local target_start_date
+  local target_end_date
+  target_start_date="$(quarter_start_date "$to_q")"
+  target_end_date="$(quarter_end_date "$to_q")"
 
   echo "Plan de migracion$([[ "$apply" == true ]] && echo ' (APPLY)' || true)"
   echo "Prefix: $prefix"
   echo "Origen: $from_q / $from_iteration"
   echo "Destino: $to_q / $to_iteration"
+  echo "Fechas destino: $target_start_date -> $target_end_date"
 
   local source_count=0
   local created_count=0
   local moved_count=0
-  local source_id source_json source_title source_state target_title target_id
+  local linked_parent_count=0
+  local updated_target_count=0
+  local closed_count=0
+  local source_id source_json source_title source_state source_parent_id source_parent_title
+  local target_title target_id target_json parent_status
   local story_id story_json story_title story_state story_type story_iteration
   while IFS= read -r source_id; do
     [[ -n "$source_id" ]] || continue
@@ -652,11 +788,25 @@ migrate() {
     source_json="$(show_work_item_json "$source_id" relations)"
     source_title="$(field_from_json "$source_json" "System.Title")"
     source_state="$(field_from_json "$source_json" "System.State")"
+    source_parent_id="$(parent_id_from_json "$source_json")"
+    source_parent_title=""
+    if [[ -n "$source_parent_id" ]]; then
+      source_parent_title="$(field_from_json "$(show_work_item_json "$source_parent_id")" "System.Title")"
+    fi
     target_title="$(replace_quarter_in_title "$source_title" "$from_q" "$to_q")"
     target_id="$(query_feature_ids "$to_iteration" "$target_title" true | sed -n '1p')"
+    target_json=""
+    if [[ -n "$target_id" ]]; then
+      target_json="$(show_work_item_json "$target_id" relations)"
+    fi
 
     echo
     echo "Feature origen: #$source_id [$source_state] $source_title"
+    if [[ -n "$source_parent_id" ]]; then
+      echo "Epica padre: #$source_parent_id $source_parent_title"
+    else
+      echo "Epica padre: ninguna"
+    fi
     if [[ -n "$target_id" ]]; then
       echo "Feature destino: reutilizar #$target_id $target_title"
     else
@@ -665,7 +815,41 @@ migrate() {
         target_id="$(create_feature "$source_json" "$target_title" "$to_iteration")"
         ((created_count += 1))
         echo "Creada Feature destino #$target_id"
+        target_json="$(show_work_item_json "$target_id" relations)"
       fi
+    fi
+
+    if [[ -n "$source_parent_id" ]]; then
+      if [[ -n "$target_json" ]]; then
+        parent_status="$(target_parent_status "$source_parent_id" "$target_json")"
+        case "$parent_status" in
+          same)
+            echo "Epica destino: ya enlazada a #$source_parent_id"
+            ;;
+          missing)
+            echo "Epica destino: enlazar a #$source_parent_id"
+            ;;
+          different:*)
+            echo "Epica destino: ATENCION, ya tiene otra epica padre (#${parent_status#different:})"
+            ;;
+        esac
+      else
+        echo "Epica destino: se enlazara a #$source_parent_id"
+      fi
+    fi
+    echo "Feature destino: estado '$AZBM_FEATURE_ACTIVE_STATE', $AZBM_FEATURE_START_DATE_FIELD=$target_start_date, $AZBM_FEATURE_END_DATE_FIELD=$target_end_date"
+    echo "Feature origen: cerrar pasando por '$AZBM_FEATURE_RESOLVED_STATE' -> '$AZBM_FEATURE_CLOSED_STATE'"
+
+    if [[ "$apply" == true ]]; then
+      [[ -n "$target_id" ]] || die "No hay Feature destino para $source_id."
+      parent_status="$(target_parent_status "$source_parent_id" "$target_json")"
+      ensure_feature_parent "$source_parent_id" "$target_id" "$target_json"
+      if [[ "$parent_status" == "missing" ]]; then
+        ((linked_parent_count += 1))
+        target_json="$(show_work_item_json "$target_id" relations)"
+      fi
+      update_target_feature_metadata "$target_id" "$target_start_date" "$target_end_date"
+      ((updated_target_count += 1))
     fi
 
     local story_count=0
@@ -698,6 +882,12 @@ migrate() {
     if (( story_count == 0 )); then
       echo "  User Stories a migrar: ninguna"
     fi
+
+    if [[ "$apply" == true ]]; then
+      close_source_feature "$source_id"
+      ((closed_count += 1))
+      echo "Feature origen cerrada: #$source_id"
+    fi
   done < <(find_open_feature_ids "$from_iteration" "$prefix" "$from_q")
 
   if (( source_count == 0 )); then
@@ -707,7 +897,7 @@ migrate() {
 
   echo
   if [[ "$apply" == true ]]; then
-    echo "Hecho. Features creadas: $created_count. User Stories migradas: $moved_count."
+    echo "Hecho. Features creadas: $created_count. Features destino actualizadas: $updated_target_count. Epicas enlazadas: $linked_parent_count. User Stories migradas: $moved_count. Features origen cerradas: $closed_count."
   else
     echo "DRY-RUN: no se ha cambiado Azure Boards. Pasa --apply para ejecutar."
   fi
