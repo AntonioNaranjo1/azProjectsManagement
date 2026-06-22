@@ -41,7 +41,13 @@ La plantilla `iteration_path_template` puede usar:
 - `{Q}`: `Q1`
 - `{qnum}`: `1`
 
+Los trimestres no distinguen mayusculas/minusculas: `2026q1` y `2026Q1` se tratan igual. Al crear el titulo destino, el script conserva el estilo del titulo origen: `app1 2026Q1` pasa a `app1 2026Q2`, y `app1 2026q1` pasa a `app1 2026q2`.
+
 Si tu iteracion no sigue una plantilla, pasa `--from-iteration` y `--to-iteration` al migrar.
+
+`iteration_path_template` se usa para calcular un `IterationPath` a partir del trimestre que pasas al comando. Por ejemplo, con `MiProyecto\\{year}\\{quarter_upper}`, `--quarter 2026q1` se convierte en `MiProyecto\\2026\\2026Q1`.
+
+`default_iteration_path` solo se usa en `list-open` cuando no pasas ni `--quarter` ni `--iteration`. Es un valor fijo de respaldo; no sirve para calcular el trimestre siguiente en `migrate`.
 
 ## Autenticacion
 

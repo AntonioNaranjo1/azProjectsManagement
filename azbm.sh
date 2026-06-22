@@ -139,7 +139,12 @@ replace_quarter_in_title() {
 
   local before="${lower_title%%"$lower_from"*}"
   local idx="${#before}"
-  printf '%s%s%s\n' "${title:0:idx}" "$to_q" "${title:idx + ${#from_q}}"
+  local matched="${title:idx:${#from_q}}"
+  local styled_to_q="$to_q"
+  if [[ "$matched" == *Q* ]]; then
+    styled_to_q="${to_q/q/Q}"
+  fi
+  printf '%s%s%s\n' "${title:0:idx}" "$styled_to_q" "${title:idx + ${#from_q}}"
 }
 
 normalize_prefix_segment() {
@@ -736,4 +741,6 @@ main() {
   esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
