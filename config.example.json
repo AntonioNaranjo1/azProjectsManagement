@@ -1,0 +1,17 @@
+{
+  "organization": "https://dev.azure.com/TU_ORGANIZACION",
+  "project": "TU_PROYECTO",
+  "area_path": "TU_PROYECTO\\Area\\Equipo",
+  "iteration_path_template": "TU_PROYECTO\\{year}\\{quarter_upper}",
+  "default_iteration_path": "",
+  "feature_type": "Feature",
+  "story_types": ["User Story"],
+  "open_states_exclude": ["Closed", "Done", "Removed", "Resolved"],
+  "copy_feature_fields": [
+    "System.Description",
+    "System.Tags",
+    "Microsoft.VSTS.Common.Priority",
+    "Microsoft.VSTS.Common.ValueArea"
+  ],
+  "extra_feature_fields": {}
+}
