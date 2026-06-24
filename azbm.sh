@@ -93,6 +93,13 @@ trim() {
   printf '%s' "$value"
 }
 
+# Azure DevOps usa '\' como separador de Area/Iteration Path. Aceptamos '/' por
+# comodidad (en JSON evita escapar como '\\') y lo convertimos. Los nombres de
+# nodo no pueden contener '/', asi que esta conversion es siempre segura.
+norm_path() {
+  printf '%s' "${1//\//\\}"
+}
+
 normalize_quarter() {
   local value
   value="$(trim "$1")"
@@ -158,7 +165,7 @@ render_iteration_path() {
   rendered="${rendered//\{qnum\}/$qnum}"
   rendered="${rendered//\{Q\}/Q$qnum}"
   rendered="${rendered//\{q\}/q$qnum}"
-  printf '%s\n' "$rendered"
+  printf '%s\n' "$(norm_path "$rendered")"
 }
 
 replace_quarter_in_title() {
@@ -352,6 +359,7 @@ require_config() {
   [[ -n "$AZBM_ORGANIZATION" ]] || die "Falta organization en $CONFIG_FILE o --organization."
   [[ -n "$AZBM_PROJECT" ]] || die "Falta project en $CONFIG_FILE o --project."
   [[ -n "$AZBM_AREA_PATH" ]] || die "Falta area_path en $CONFIG_FILE o --area."
+  AZBM_AREA_PATH="$(norm_path "$AZBM_AREA_PATH")"
 }
 
 az_base() {
@@ -735,11 +743,11 @@ resolve_list_iteration() {
   local quarter="$1"
   local iteration="$2"
   if [[ -n "$iteration" ]]; then
-    printf '%s\n' "$iteration"
+    printf '%s\n' "$(norm_path "$iteration")"
   elif [[ -n "$quarter" ]]; then
     render_iteration_path "$AZBM_ITERATION_PATH_TEMPLATE" "$quarter"
   elif [[ -n "$AZBM_DEFAULT_ITERATION_PATH" ]]; then
-    printf '%s\n' "$AZBM_DEFAULT_ITERATION_PATH"
+    printf '%s\n' "$(norm_path "$AZBM_DEFAULT_ITERATION_PATH")"
   else
     die "Indica --iteration, --quarter con iteration_path_template, o default_iteration_path en config."
   fi
@@ -896,6 +904,8 @@ migrate() {
   [[ -n "$to_q" ]] || to_q="$(next_quarter "$from_q")"
   [[ -n "$from_iteration" ]] || from_iteration="$(render_iteration_path "$AZBM_ITERATION_PATH_TEMPLATE" "$from_q")"
   [[ -n "$to_iteration" ]] || to_iteration="$(render_iteration_path "$AZBM_ITERATION_PATH_TEMPLATE" "$to_q")"
+  from_iteration="$(norm_path "$from_iteration")"
+  to_iteration="$(norm_path "$to_iteration")"
   local target_start_date
   local target_end_date
   target_start_date="$(quarter_start_date "$to_q")"
