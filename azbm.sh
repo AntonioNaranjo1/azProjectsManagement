@@ -442,6 +442,7 @@ query_features_json() {
   local title_contains="${4:-}"
   local wiql
   wiql="$(build_features_wiql "$iteration_path" "$exact_title" "$include_closed" "$title_contains")"
+  [[ -n "${AZBM_DEBUG:-}" ]] && printf 'WIQL: %s\n' "$wiql" >&2
   az_with_project_json boards query --wiql "$wiql"
 }
 
