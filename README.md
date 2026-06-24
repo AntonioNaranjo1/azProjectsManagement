@@ -108,6 +108,19 @@ Filtrar por prefijo:
 ./azbm.sh list-open --quarter 2026q1 --prefix "app1 web"
 ```
 
+Si Azure devuelve un error `400` al consultar, suele ser porque el `IterationPath`
+calculado no coincide exactamente con un nodo real. Con `--no-iteration` se omite
+ese filtro y el trimestre se identifica por el titulo (que ya incluye `2026q1`):
+
+```bash
+./azbm.sh list-open --quarter 2026q1 --no-iteration
+./azbm.sh list-open --quarter 2026q1 --prefix app1 --no-iteration
+```
+
+Si asi si aparecen las Features, el problema estaba en `iteration_path_template`:
+ajustalo al nombre real del nodo (mira Project Settings -> Boards ->
+Project configuration -> Iterations).
+
 Si el prefijo tiene espacios, ponlo siempre entre comillas.
 
 Planificar migracion, sin escribir nada:

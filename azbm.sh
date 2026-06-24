@@ -34,7 +34,7 @@ usage() {
 Uso:
   ./azbm.sh doctor [--az-command az]
   ./azbm.sh next-q <YYYYqN>
-  ./azbm.sh list-open [opciones] --quarter <YYYYqN> [--prefix <prefijo>]
+  ./azbm.sh list-open [opciones] --quarter <YYYYqN> [--prefix <prefijo>] [--no-iteration]
   ./azbm.sh migrate [opciones] --prefix <prefijo> --from-q <YYYYqN> [--to-q <YYYYqN>] [--apply]
 
 Opciones comunes:
@@ -408,7 +408,11 @@ build_features_wiql() {
   wiql+="[System.TeamProject] = $(wiql_quote "$AZBM_PROJECT")"
   wiql+=" AND [System.WorkItemType] = $(wiql_quote "$AZBM_FEATURE_TYPE")"
   wiql+=" AND [System.AreaPath] = $(wiql_quote "$AZBM_AREA_PATH")"
-  wiql+=" AND [System.IterationPath] = $(wiql_quote "$iteration_path")"
+  # Sin iteration_path se omite el filtro: util cuando el nodo de IterationPath
+  # no casa exactamente y Azure devuelve 400. El trimestre se filtra por titulo.
+  if [[ -n "$iteration_path" ]]; then
+    wiql+=" AND [System.IterationPath] = $(wiql_quote "$iteration_path")"
+  fi
   if [[ -n "$exact_title" ]]; then
     wiql+=" AND [System.Title] = $(wiql_quote "$exact_title")"
   elif [[ -n "$title_contains" ]]; then
@@ -792,6 +796,7 @@ list_open() {
   local quarter=""
   local iteration=""
   local prefix=""
+  local no_iteration=false
   local args=("$@")
   local i=0
   while (( i < ${#args[@]} )); do
@@ -816,6 +821,10 @@ list_open() {
         prefix="${args[$((i + 1))]}"
         ((i += 2))
         ;;
+      --no-iteration)
+        no_iteration=true
+        ((i += 1))
+        ;;
       -h|--help)
         usage
         return 0
@@ -827,9 +836,14 @@ list_open() {
   done
 
   require_config
-  local iteration_path
-  iteration_path="$(resolve_list_iteration "$quarter" "$iteration")"
-  echo "Features abiertas en AreaPath='$AZBM_AREA_PATH', IterationPath='$iteration_path'"
+  local iteration_path=""
+  if [[ "$no_iteration" == true ]]; then
+    [[ -n "$quarter" ]] || die "Con --no-iteration necesitas --quarter para filtrar el trimestre por titulo."
+    echo "Features abiertas en AreaPath='$AZBM_AREA_PATH', sin filtro de IterationPath (trimestre '$quarter' por titulo)"
+  else
+    iteration_path="$(resolve_list_iteration "$quarter" "$iteration")"
+    echo "Features abiertas en AreaPath='$AZBM_AREA_PATH', IterationPath='$iteration_path'"
+  fi
   printf '%-8s %-18s %-16s %s\n' "ID" "Estado" "Tipo" "Titulo"
   printf '%-8s %-18s %-16s %s\n' "--------" "------------------" "----------------" "------"
   print_open_features "$iteration_path" "$prefix" "$quarter"
