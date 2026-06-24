@@ -15,6 +15,7 @@ AZBM_DEFAULT_ITERATION_PATH="${AZBM_DEFAULT_ITERATION_PATH:-}"
 AZBM_FEATURE_TYPE="${AZBM_FEATURE_TYPE:-Feature}"
 AZBM_STORY_TYPES=("User Story")
 AZBM_OPEN_STATES_EXCLUDE=("Closed" "Done" "Removed" "Resolved")
+AZBM_OPEN_STATES_INCLUDE=("New" "Active" "In Progress")
 AZBM_FEATURE_ACTIVE_STATE="${AZBM_FEATURE_ACTIVE_STATE:-Active}"
 AZBM_FEATURE_RESOLVED_STATE="${AZBM_FEATURE_RESOLVED_STATE:-Resolved}"
 AZBM_FEATURE_CLOSED_STATE="${AZBM_FEATURE_CLOSED_STATE:-Closed}"
@@ -182,7 +183,13 @@ replace_quarter_in_title() {
 }
 
 normalize_prefix_segment() {
-  trim "$1" | sed -E 's/[[:space:]_:/#-]+$//'
+  local value
+  value="$(trim "$1")"
+  # Quita separadores finales (espacios, _ : / # -) sin lanzar sed por cada fila.
+  while [[ -n "$value" && "${value: -1}" == [[:space:]_:/#-] ]]; do
+    value="${value%?}"
+  done
+  printf '%s' "$value"
 }
 
 title_matches_prefix_quarter() {
@@ -249,19 +256,38 @@ load_config() {
   find_jq
   [[ -f "$CONFIG_FILE" ]] || return 0
 
-  AZBM_ORGANIZATION="$(jq_run -r '.organization // .organization_url // ""' "$CONFIG_FILE")"
-  AZBM_PROJECT="$(jq_run -r '.project // ""' "$CONFIG_FILE")"
-  AZBM_AREA_PATH="$(jq_run -r '.area_path // .areaPath // ""' "$CONFIG_FILE")"
-  AZBM_ITERATION_PATH_TEMPLATE="$(jq_run -r '.iteration_path_template // .iterationPathTemplate // ""' "$CONFIG_FILE")"
-  AZBM_DEFAULT_ITERATION_PATH="$(jq_run -r '.default_iteration_path // .defaultIterationPath // ""' "$CONFIG_FILE")"
-  AZBM_FEATURE_TYPE="$(jq_run -r '.feature_type // .featureType // "Feature"' "$CONFIG_FILE")"
-  AZBM_FEATURE_ACTIVE_STATE="$(jq_run -r '.feature_active_state // .featureActiveState // "Active"' "$CONFIG_FILE")"
-  AZBM_FEATURE_RESOLVED_STATE="$(jq_run -r '.feature_resolved_state // .featureResolvedState // "Resolved"' "$CONFIG_FILE")"
-  AZBM_FEATURE_CLOSED_STATE="$(jq_run -r '.feature_closed_state // .featureClosedState // "Closed"' "$CONFIG_FILE")"
-  AZBM_FEATURE_START_DATE_FIELD="$(jq_run -r '.feature_start_date_field // .featureStartDateField // "Microsoft.VSTS.Scheduling.StartDate"' "$CONFIG_FILE")"
-  AZBM_FEATURE_END_DATE_FIELD="$(jq_run -r '.feature_end_date_field // .featureEndDateField // "Microsoft.VSTS.Scheduling.TargetDate"' "$CONFIG_FILE")"
+  # Lee todos los escalares en una sola invocacion de jq (un valor por linea).
+  # Evita ~11 spawns de jq por ejecucion, que en Windows/Git Bash pesan.
+  local -a cfg=()
+  mapfile -t cfg < <(jq_run -r '
+    (.organization // .organization_url // ""),
+    (.project // ""),
+    (.area_path // .areaPath // ""),
+    (.iteration_path_template // .iterationPathTemplate // ""),
+    (.default_iteration_path // .defaultIterationPath // ""),
+    (.feature_type // .featureType // "Feature"),
+    (.feature_active_state // .featureActiveState // "Active"),
+    (.feature_resolved_state // .featureResolvedState // "Resolved"),
+    (.feature_closed_state // .featureClosedState // "Closed"),
+    (.feature_start_date_field // .featureStartDateField // "Microsoft.VSTS.Scheduling.StartDate"),
+    (.feature_end_date_field // .featureEndDateField // "Microsoft.VSTS.Scheduling.TargetDate")
+  ' "$CONFIG_FILE")
+
+  AZBM_ORGANIZATION="${cfg[0]:-}"
+  AZBM_PROJECT="${cfg[1]:-}"
+  AZBM_AREA_PATH="${cfg[2]:-}"
+  AZBM_ITERATION_PATH_TEMPLATE="${cfg[3]:-}"
+  AZBM_DEFAULT_ITERATION_PATH="${cfg[4]:-}"
+  AZBM_FEATURE_TYPE="${cfg[5]:-Feature}"
+  AZBM_FEATURE_ACTIVE_STATE="${cfg[6]:-Active}"
+  AZBM_FEATURE_RESOLVED_STATE="${cfg[7]:-Resolved}"
+  AZBM_FEATURE_CLOSED_STATE="${cfg[8]:-Closed}"
+  AZBM_FEATURE_START_DATE_FIELD="${cfg[9]:-Microsoft.VSTS.Scheduling.StartDate}"
+  AZBM_FEATURE_END_DATE_FIELD="${cfg[10]:-Microsoft.VSTS.Scheduling.TargetDate}"
+
   load_json_array '.story_types // .storyTypes' AZBM_STORY_TYPES
   load_json_array '.open_states_exclude // .openStatesExclude' AZBM_OPEN_STATES_EXCLUDE
+  load_json_array '.open_states_include // .openStatesInclude' AZBM_OPEN_STATES_INCLUDE
   load_json_array '.copy_feature_fields // .copyFeatureFields' AZBM_COPY_FEATURE_FIELDS
   AZBM_EXTRA_FEATURE_FIELDS=()
   mapfile -t AZBM_EXTRA_FEATURE_FIELDS < <(
@@ -270,6 +296,7 @@ load_config() {
 
   [[ ${#AZBM_STORY_TYPES[@]} -gt 0 ]] || AZBM_STORY_TYPES=("User Story")
   [[ ${#AZBM_OPEN_STATES_EXCLUDE[@]} -gt 0 ]] || AZBM_OPEN_STATES_EXCLUDE=("Closed" "Done" "Removed" "Resolved")
+  [[ ${#AZBM_OPEN_STATES_INCLUDE[@]} -gt 0 ]] || AZBM_OPEN_STATES_INCLUDE=("New" "Active" "In Progress")
 }
 
 parse_common_first_pass() {
@@ -345,20 +372,29 @@ field_from_json() {
   jq_run -r --arg field "$field" '.fields[$field] // ""' <<<"$json"
 }
 
-closed_states_wiql() {
+open_states_wiql() {
   local result=""
   local state
-  for state in "${AZBM_OPEN_STATES_EXCLUDE[@]}"; do
+  for state in "${AZBM_OPEN_STATES_INCLUDE[@]}"; do
     [[ -n "$result" ]] && result+=", "
     result+="$(wiql_quote "$state")"
   done
   printf '%s' "$result"
 }
 
+# Comprueba en cliente que el estado esta dentro de la lista blanca de abiertos.
+# Red de seguridad por si la respuesta de az trae estados que la WIQL no filtro.
+state_is_open() {
+  local state="$1"
+  (( ${#AZBM_OPEN_STATES_INCLUDE[@]} > 0 )) || return 0
+  contains_casefold "$state" "${AZBM_OPEN_STATES_INCLUDE[@]}"
+}
+
 build_features_wiql() {
   local iteration_path="$1"
   local exact_title="${2:-}"
   local include_closed="${3:-false}"
+  local title_contains="${4:-}"
 
   local wiql="SELECT [System.Id], [System.Title], [System.State], [System.WorkItemType] FROM WorkItems WHERE "
   wiql+="[System.TeamProject] = $(wiql_quote "$AZBM_PROJECT")"
@@ -367,9 +403,13 @@ build_features_wiql() {
   wiql+=" AND [System.IterationPath] = $(wiql_quote "$iteration_path")"
   if [[ -n "$exact_title" ]]; then
     wiql+=" AND [System.Title] = $(wiql_quote "$exact_title")"
+  elif [[ -n "$title_contains" ]]; then
+    # Prefiltro en servidor: reduce filas devueltas. El cliente sigue afinando
+    # el prefijo exacto con title_matches_prefix_quarter (CONTAINS es superconjunto).
+    wiql+=" AND [System.Title] CONTAINS $(wiql_quote "$title_contains")"
   fi
-  if [[ "$include_closed" != "true" && ${#AZBM_OPEN_STATES_EXCLUDE[@]} -gt 0 ]]; then
-    wiql+=" AND [System.State] NOT IN ($(closed_states_wiql))"
+  if [[ "$include_closed" != "true" && ${#AZBM_OPEN_STATES_INCLUDE[@]} -gt 0 ]]; then
+    wiql+=" AND [System.State] IN ($(open_states_wiql))"
   fi
   wiql+=" ORDER BY [System.Title]"
   printf '%s\n' "$wiql"
@@ -379,8 +419,9 @@ query_feature_ids() {
   local iteration_path="$1"
   local exact_title="${2:-}"
   local include_closed="${3:-false}"
+  local title_contains="${4:-}"
   local json
-  json="$(query_features_json "$iteration_path" "$exact_title" "$include_closed")"
+  json="$(query_features_json "$iteration_path" "$exact_title" "$include_closed" "$title_contains")"
   jq_run -r '
     if type == "array" then
       .[]? | (.id // .fields["System.Id"] // empty)
@@ -398,8 +439,9 @@ query_features_json() {
   local iteration_path="$1"
   local exact_title="${2:-}"
   local include_closed="${3:-false}"
+  local title_contains="${4:-}"
   local wiql
-  wiql="$(build_features_wiql "$iteration_path" "$exact_title" "$include_closed")"
+  wiql="$(build_features_wiql "$iteration_path" "$exact_title" "$include_closed" "$title_contains")"
   az_with_project_json boards query --wiql "$wiql"
 }
 
@@ -454,26 +496,29 @@ find_open_feature_ids() {
   local prefix="$2"
   local quarter="$3"
   local json
-  json="$(query_features_json "$iteration_path" "" false)"
+  json="$(query_features_json "$iteration_path" "" false "$prefix")"
 
   if query_json_has_fields "$json"; then
     local row id state type title
     while IFS=$'\t' read -r id state type title; do
       [[ -n "$id" ]] || continue
+      state_is_open "$state" || continue
       if title_matches_prefix_quarter "$title" "$prefix" "$quarter"; then
         printf '%s\n' "$id"
       fi
     done < <(feature_rows_from_query_json "$json")
   else
-    local id item_json title
+    local id item_json title state
     while IFS= read -r id; do
       [[ -n "$id" ]] || continue
       item_json="$(show_work_item_json "$id")"
+      state="$(field_from_json "$item_json" "System.State")"
+      state_is_open "$state" || continue
       title="$(field_from_json "$item_json" "System.Title")"
       if title_matches_prefix_quarter "$title" "$prefix" "$quarter"; then
         printf '%s\n' "$id"
       fi
-    done < <(query_feature_ids "$iteration_path" "" false)
+    done < <(query_feature_ids "$iteration_path" "" false "$prefix")
   fi
 }
 
@@ -483,13 +528,14 @@ print_open_features() {
   local quarter="$3"
   local json
   echo "Consultando Azure Boards..." >&2
-  json="$(query_features_json "$iteration_path" "" false)"
+  json="$(query_features_json "$iteration_path" "" false "$prefix")"
 
   local matched_count=0
   if query_json_has_fields "$json"; then
     local row id state type title
     while IFS=$'\t' read -r id state type title; do
       [[ -n "$id" ]] || continue
+      state_is_open "$state" || continue
       if title_matches_prefix_quarter "$title" "$prefix" "$quarter"; then
         printf '%-8s %-18s %-16s %s\n' "$id" "$state" "$type" "$title"
         ((matched_count += 1))
@@ -501,14 +547,15 @@ print_open_features() {
     while IFS= read -r id; do
       [[ -n "$id" ]] || continue
       item_json="$(show_work_item_json "$id")"
+      state="$(field_from_json "$item_json" "System.State")"
+      state_is_open "$state" || continue
       title="$(field_from_json "$item_json" "System.Title")"
       if title_matches_prefix_quarter "$title" "$prefix" "$quarter"; then
-        state="$(field_from_json "$item_json" "System.State")"
         type="$(field_from_json "$item_json" "System.WorkItemType")"
         printf '%-8s %-18s %-16s %s\n' "$id" "$state" "$type" "$title"
         ((matched_count += 1))
       fi
-    done < <(query_feature_ids "$iteration_path" "" false)
+    done < <(query_feature_ids "$iteration_path" "" false "$prefix")
   fi
 
   if (( matched_count == 0 )); then

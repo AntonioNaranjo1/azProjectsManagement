@@ -29,6 +29,7 @@ Crea `azbm.config.json` a partir de `config.example.json` y ajusta:
   "iteration_path_template": "MiProyecto\\{year}\\{quarter_upper}",
   "feature_type": "Feature",
   "story_types": ["User Story"],
+  "open_states_include": ["New", "Active", "In Progress"],
   "feature_active_state": "Active",
   "feature_resolved_state": "Resolved",
   "feature_closed_state": "Closed",
@@ -90,6 +91,15 @@ Listar Features abiertas de un trimestre:
 ```bash
 ./azbm.sh list-open --quarter 2026q1
 ```
+
+`list-open` solo muestra Features cuyo `System.State` esta en `open_states_include`
+(por defecto `New`, `Active`, `In Progress`). El filtro se aplica en la propia
+consulta WIQL (`[System.State] IN (...)`), asi que las Features cerradas, resueltas
+o eliminadas/`Removed` ni siquiera se descargan: la consulta es mas rapida y no se
+listan. Ajusta `open_states_include` a los estados "abiertos" reales de tu proceso
+de Azure (los nombres distinguen el proceso: Agile usa `Active`, Scrum usa
+`In Progress`, etc.). El antiguo `open_states_exclude` se sigue usando para decidir
+que User Stories se consideran cerradas al migrar.
 
 Filtrar por prefijo:
 
